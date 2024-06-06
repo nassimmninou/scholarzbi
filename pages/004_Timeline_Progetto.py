@@ -2,35 +2,36 @@ import streamlit as st
 import plotly.express as px
 import pandas as pd
 import shutil
+import re
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import OpenAI, ChatOpenAI
-import json
-from docx import Document
+from langchain_community.document_loaders import PyPDFDirectoryLoader
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.prompts import ChatPromptTemplate
 from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
-import PyPDF2
-import os
 from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsParser
 from typing import List
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
-from typing import Optional
-from langchain.prompts import ChatPromptTemplate
-from langchain.chat_models import ChatOpenAI
 from utils import read_file_based_on_type
-import re
-from dotenv import main
-from dotenv import load_dotenv
+from docx import Document
+from langchain.chat_models import ChatOpenAI
+import PyPDF2
+import os
 
+# Set Streamlit page configuration
+st.set_page_config(page_title="Timeline progetto", layout="wide", initial_sidebar_state="expanded")
 
-()
-
+# Define the TimeLine model
 class TimeLine(BaseModel):
-    """From the given text extract the tasks timelines start dates, end dates, resources"""
     tasks: list = Field(description="List down all the tasks that are in the given text but remember shorten them to 2 words")
     start_datas: list = Field(description="List down all the start dates of the tasks respectively (format: 01-01-2023)")
     end_datas: list = Field(description="List down all the end/finish dates of the tasks respectively (format: 01-03-2023)")
     resourses: list = Field(description="List all the resources being used in the tasks, but remember shorten them to 2 words")
 
+# Initialize OpenAI model
 output_model = ChatOpenAI(model="gpt-4o", temperature=0)
 output_functions = [convert_pydantic_to_openai_function(TimeLine)]
 output_prompt = ChatPromptTemplate.from_messages([
@@ -48,6 +49,35 @@ output_prompt = ChatPromptTemplate.from_messages([
 output_model_with_functions = output_model.bind(functions=output_functions, function_call={"name": "TimeLine"})
 output_chain = output_prompt | output_model_with_functions | JsonOutputFunctionsParser()
 
+# Initialize query model
+llm = ChatOpenAI(model="gpt-3.5-turbo-1106", temperature=0.11)
+info_prompt = ChatPromptTemplate.from_messages([
+    ("system", """Note you only speak Italian, you answers must be in italian , You will be asked about the timeline question you should respond with good task resources start dates and end dates.
+            Be specific on that query as you also get the context.
+            Context: {context}
+            Query: {query}
+            """),
+    ("human", "{context}"),
+    ("human", "{query}"),
+])
+query_chain = info_prompt | llm
+
+# Create vector database
+def create_vector_database(directory):
+    loader = PyPDFDirectoryLoader(directory)
+    docs = loader.load()
+    documents = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=100).split_documents(docs)
+    vector = FAISS.from_documents(documents, OpenAIEmbeddings())
+    return vector
+
+# Get query answer
+def get_query_answer(query, vector):
+    X = vector.similarity_search(query)
+    X = "\n".join(x.page_content for x in X)
+    message = query_chain.invoke({"context": X, "query": query})
+    return message.content
+
+# Read PDF file
 def read_pdf_file(file_path):
     with open(file_path, 'rb') as file:
         reader = PyPDF2.PdfReader(file)
@@ -56,6 +86,7 @@ def read_pdf_file(file_path):
             content += reader.pages[page_num].extract_text()
         return content
 
+# Create Gantt chart
 def create_gantt_chart(tasks, start_dates, end_dates, resources):
     df = pd.DataFrame({
         'Task': tasks,
@@ -63,39 +94,40 @@ def create_gantt_chart(tasks, start_dates, end_dates, resources):
         'Finish': end_dates,
         'Resource': resources
     })
-    print(df)
     fig = px.timeline(df, x_start="Start", x_end="Finish", y="Task", color="Resource")
     fig.update_yaxes(categoryorder="total ascending")
     return fig
 
-# -------------------------------------------------------------------------------------------
-
+# Convert year range to month
 def convert_year_range_to_month(year_range: str) -> list:
-    # Define the regex pattern for matching YYYY-YYYY format
     pattern = re.compile(r'^(\d{4})-(\d{4})$')
-    
-    # Check if the input matches the pattern
     match = pattern.match(year_range)
-    
     if match:
         start_year = match.group(1)
         end_year = match.group(2)
-        
-        # Return the list of converted years
         return [f'01-{start_year}', f'01-{end_year}']
     else:
         raise ValueError("Input does not match the YYYY-YYYY format.")
 
-# Example usage
-try:
-    result = convert_year_range_to_month('01-2025')
-    print(result)  # Output: ['01-2024', '01-2025']
-except ValueError as e:
-    print(e)
-
-# ------------------------------------------------
-
-
+# Convert to resources
+def convert_to_resources(X):
+    start_dates = []
+    end_dates = []
+    tasks = X['tasks']
+    for date in X['start_datas']:
+        try:
+            result = convert_year_range_to_month(date)
+            start_dates.append(pd.to_datetime(result[0]))
+        except ValueError as e:
+            start_dates.append(pd.to_datetime(date))
+    for date in X['end_datas']:
+        try:
+            result = convert_year_range_to_month(date)
+            end_dates.append(pd.to_datetime(result[1]))
+        except ValueError as e:
+            end_dates.append(pd.to_datetime(date))
+    resources = X["resourses"]
+    return resources, tasks, start_dates, end_dates
 
 def main():
     st.markdown("""
@@ -191,10 +223,14 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    st.title("Timeline progetto")
+    st.markdown('<h1>Timeline progetto</h1>', unsafe_allow_html=True)
+
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
 
     uploaded_file = st.file_uploader('Upload a pdf file', type=['pdf'])
-    if uploaded_file:
+    st.session_state.uploaded_file = uploaded_file
+    if st.session_state.uploaded_file:
         upload_directory = "tendor_timeline"
         os.makedirs(upload_directory, exist_ok=True)
     
@@ -203,33 +239,33 @@ def main():
             w.write(uploaded_file.getvalue())
         if "data" not in st.session_state:
             st.session_state.data = read_pdf_file(file_path)
+        if "vector" not in st.session_state:
+            st.session_state.vector = create_vector_database(upload_directory)
         
         shutil.rmtree(upload_directory)
         
         X = output_chain.invoke({"input": st.session_state.data, "output_functions": output_functions})
-        print("Raw data", pd.DataFrame(X))
-        start_dates =[]
-        end_dates = []
-        tasks = X['tasks']
-        for date in X['start_datas']:
-            try:
-                result = convert_year_range_to_month(date)
-                start_dates.append(pd.to_datetime(result[0]))
-            except ValueError as e:
-                start_dates.append(pd.to_datetime(date))
-            
-        for date in X['end_datas']:
-            try:
-                result = convert_year_range_to_month(date)
-                end_dates.append(pd.to_datetime(result[1]))
-            except ValueError as e:
-                end_dates.append(pd.to_datetime(date))
-          
-        resources = X["resourses"]
-        
-        if st.sidebar.button("Generate Gantt Chart"):
-            fig = create_gantt_chart(tasks, start_dates, end_dates, resources)
-            st.plotly_chart(fig)
+        st.session_state.X = X  # Save the result in session state
+        st.session_state.uploaded_file = None
+
+    if 'X' in st.session_state:
+        resources, tasks, start_dates, end_dates = convert_to_resources(st.session_state.X)
+        fig = create_gantt_chart(tasks, start_dates, end_dates, resources)
+        st.plotly_chart(fig)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    question = st.text_input("Question Here")
+    if "vector" in st.session_state:
+        if question:
+            answer = get_query_answer(question, st.session_state.vector)
+            st.session_state.chat_history.append({"question": question, "answer": answer})
+
+    # Display chat history with the latest question and answer on top
+    for chat in reversed(st.session_state.chat_history):
+        st.markdown(f"<div class='chat-bubble'>"
+                    f"<strong>Q:</strong> {chat['question']}<br>"
+                    f"<strong>A:</strong> {chat['answer']}</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
