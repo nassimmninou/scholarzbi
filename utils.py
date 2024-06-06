@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+from dotenv import main
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import OpenAI, ChatOpenAI
 # Importing PyPDFDirectoryLoader from langchain_community.document_loaders to load PDF documents from a directory

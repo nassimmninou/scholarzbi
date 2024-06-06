@@ -8,6 +8,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 import matplotlib.pyplot as plt
+from dotenv import main
 
 st.set_page_config(page_title="Analizza Preventivi", layout="wide", initial_sidebar_state="expanded")
 

@@ -18,8 +18,11 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.chat_models import ChatOpenAI
 from utils import read_file_based_on_type
 import re
+from dotenv import main
+from dotenv import load_dotenv
 
-load_dotenv()
+
+()
 
 class TimeLine(BaseModel):
     """From the given text extract the tasks timelines start dates, end dates, resources"""
