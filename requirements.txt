@@ -1,0 +1,10 @@
+langchain
+langchain_community
+faiss-cpu
+pypdf
+langchain_openai
+streamlit
+python-docx
+PyPDF2
+plotly
+python-dotenv
