@@ -8,7 +8,6 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 import matplotlib.pyplot as plt
-from dotenv import main
 
 st.set_page_config(page_title="Analizza Preventivi", layout="wide", initial_sidebar_state="expanded")
 
@@ -138,13 +137,17 @@ def handle_userinput(user_question):
       "series": [],
       "legend": false
     }. 
-    The "title" field should contain the title of the chart. The "xlabel" and "ylabel" fields should contain the labels for the X and Y axes, respectively. The "data" field should be an array of objects representing the data points, and the "charttype" field should specify the appropriate chart type (e.g., "line", "bar"). The "series" field should contain an array of series names if applicable, and the "legend" field should be a boolean indicating whether a legend should be displayed. Ensure that the response provides insights that fulfill the user's request and accurately reflect the benchmark objectives, considering each document represents a vendor quote. Avoid using nested JSON structures for the data field. Make sure the data you generate is ready to get plotted using matplotlib Answer the following question: """ + user_question
+    The "title" field should contain the title of the chart. The "xlabel" and "ylabel" fields should contain the labels for the X and Y axes, respectively. The "data" field should be an array of objects representing the data points, and the "charttype" field should specify the appropriate chart type (e.g., "line", "bar"). The "series" field should contain an array of series names if applicable, and the "legend" field should be a boolean indicating whether a legend should be displayed. Ensure that the response provides insights that fulfill the user's request and accurately reflect the benchmark objectives, considering each document represents a vendor quote. Avoid using nested JSON structures for the data field. Answer the following question: """ + user_question
 
     response = st.session_state.conversation({'question': modified_prompt})
     st.session_state.chat_history.append((user_question, response['answer'], None))
 
     # Parse the JSON response
-    json_response = json.loads(response['answer'])
+    try:
+        json_response = json.loads(response['answer'])
+    except json.JSONDecodeError:
+        st.write("Error: Invalid JSON response")
+        return
 
     # Generate the interpretation
     llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
@@ -156,6 +159,8 @@ def handle_userinput(user_question):
     st.session_state.chat_history[-1] = (user_question, response['answer'], llm_response)
 
     # Plot the data
+    plot_data(json_response)
+
 def plot_data(json_response):
     try:
         data = json_response['data']
@@ -203,7 +208,7 @@ def plot_data(json_response):
         plt.tight_layout()
         st.pyplot(fig)
     except Exception as e:
-        st.write("Error")
+        st.write("Coudn't generate the Graph")
 
 def main():
     load_dotenv()
@@ -250,10 +255,13 @@ def main():
             for entry in reversed(st.session_state.chat_history):
                 question, answer, interpretation = entry if len(entry) == 3 else (*entry, None)
                 st.write(question)
-                json_response = json.loads(answer)
-                plot_data(json_response)
-                if interpretation:
-                    st.write(interpretation)
+                try:
+                    json_response = json.loads(answer)
+                    plot_data(json_response)
+                    if interpretation:
+                        st.write(interpretation)
+                except json.JSONDecodeError:
+                    st.write("Error: Invalid JSON response")
 
-if __name__ == '__main__':
+if __name__:
     main()
